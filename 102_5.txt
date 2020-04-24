@@ -1,0 +1,89 @@
+Analysis of AOL 9.5 (CDDBControl.dll) ActiveX Heap Overflow
+
+I decided to take a look at this vulnerability and determine the 'exploitability' of this bug under windows XP SP3. Despite the control being marked not safe for scripting or initialization, I thought it might be an interesting bug to analyse. I wouldn't have added this section, but sinn3r asked, so I decided to add it :) Now due to it being within an ActiveX control, one of the ways that it can be triggered is through IE's browser using a scripting language of choice. I decided to use JavaScript simply because it was the most flexible and heapLib.js was also written in it.
+
+My environment was as follows:
+- IE 6/7
+- XP SP3
+- heapLib.js
+
+So let the fun begin! First of all I triggered the PoC provided at exploit-db by Hellcode Research. Lets analyse the crash:
+
+ 
+
+ 
+
+What we can see here is the segment in the current heap actually runs out of uncommitted memory and cannot commit more memory for that heap segment.
+
+ 
+
+ 
+
+And if we view it:
+
+ 
+
+ 
+
+ 
+
+ 
+
+We run out of the heap segment without the ability to create another segment. So what do we do? Well we know that we have to trigger an unlink operation. In order to do that, we need the windows heap manager to copy all the data into the allocate buffer (overwriting other chunks) but not running off the current segment. Then when the next allocation or free is triggered, it will attempt to unlink. I modified the PoC to trigger the overflow with only 2240 bytes instead of 4000.
+?
+var x = unescape("%41");
+while (x.length<2240) x += x;
+x = x.substring(0,2240);
+target.BindToFile(x,1);
+
+Now when we trigger the bug, we don't actually crash the browser. Of course the chunk is overflowed, but until there is another unlink operation, it will not crash. But when closing the browser, the garbage collector runs and allocates all freed chunks and as such multiple calls to RtlAllocateHeap() are made and the bug is triggered. This time, things look a little more realistic.
+
+ 
+
+ 
+
+(384c.16e0): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=41414141 ebx=02270000 ecx=02273f28 edx=02270178 esi=02273f20 edi=41414141
+eip=7c9111de esp=0013e544 ebp=0013e764 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010202
+ntdll!RtlAllocateHeap+0x567:
+7c9111de 8b10            mov     edx,dword ptr [eax]  ds:0023:41414141=????????
+
+
+ 
+
+Great, so we have a potentially exploitable condition. In this case, flink is EAX and blink is EDI. Under XP sp0-1 and below, we could simply perform a basic UEF function overwrite and take control. But we have access to the browsers powerful scripting ability to 'massage' the heap so we will try targeting the vulnerability under XP SP3. When analysing the heap layouts, I quickly noticed that the Active X control actually creates its own heap at run time and the crash is triggered on a freelist insert.
+
+ 
+
+ 
+
+When using the heapLib.js library, I was able to successfully manipulate the heap quite well, that is, the default processes heap **not** the active X controls heap. At this point, I can somewhat say that under Windows XP SP3 and above it *seems* to be unexploitable, of course this could be a gross misinterpretation but as far as I can tell, if the objects heap cannot be manipulated, then it cannot be exploited.
+
+Hooking:
+A useful tip to know when debugging applications that contain a heap overflow is the number of allocations and frees and what size they are. During a process/threads life, many allocations and frees are made and it certainly is time intensive to breakpoint all of them. One neat thing with immunity debugger is that you can use the !hookheap plugin to hook RtlAllocateHeap() and RtlFreeHeap() and so you can find the size and number of allocations/frees that are executed during any particular operation.
+
+ 
+
+ 
+
+And as you can see, one particular allocation stands out, an allocation of a large number of bytes seems to indicate a request to the target vulnerable server.
+Conclusion
+
+Heap managers are very complex to understand and to exploit heap overflows requires many man hours as each situation is different. Understanding the current context of the target application and limitations contained within it are key to determining the exploitability of a heap overflow. The protection mitigation's enforced by Microsoft prevent majority of heap overflow exploitation in a generic sense, however from time to time we see application specific situations that arise and can be abused by an attacker.
+
+References:
+- http://windbg.info/doc/1-common-cmds.html
+- http://www.insomniasec.com/publications/Heaps_About_Heaps.ppt
+- http://cybertech.net/~sh0ksh0k/projects/winheap/XPSP2 Heap Exploitation.ppt
+- some small aspects from: http://illmatics.com/Understanding_the_LFH.pdf
+- http://www.blackhat.com/presentations/win-usa-04/bh-win-04-litchfield/bh-win-04-litchfield.ppt
+- http://www.insomniasec.com/publications/Exploiting_Freelist[0]_On_XPSP2.zip
+- http://www.insomniasec.com/publications/DEPinDepth.ppt (heap segment information)
+- Advanced windows Debugging (Mario Hewardt)
+- www.ptsecurity.com/download/defeating-xpsp2-heap-protection.pdf
+- http://grey-corner.blogspot.com/2010/12/introducing-vulnserver.html
+- http://www.immunityinc.com/downloads/immunity_win32_exploitation.final2.ppt
+- Understanding and bypassing Windows Heap Protection by Nicolas Waisman (2007): http://kkamagui.springnote.com/pages/1350732/attachments/579350

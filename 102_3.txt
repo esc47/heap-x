@@ -1,0 +1,68 @@
+The back-end allocator - Freelist
+
+At offset 0x178 of the heap structure, we can see the start of the FreeList[] array. The FreeList contains a doubly linked list of chunks. They are doubly linked due to containing both flink and blink.
+
+ 
+
+ 
+
+The above diagram shows that the freelist contains an indexed array of heap chunks ranging from 0-128. Any chunk sizes between 0 and 1016 (its 1016 because the maximum size is 1024 - 8 bytes of metadata) are stored according to their allocated unit size * 8. For example, say that I have a chunk of 40 bytes to free, then I would place the chunk at index 4 of the freelist (40/8).
+
+If a chunk size was above 1016 ( 127 * 8 ) bytes, then it would be stored in the freelist[0] entry in numerical size ordering. Below is a description of the freelist chunk.
+
+
+Headers 	Self Size (0x2) 	Prev Size (0x2) 	Segment index (0x1) 	Flag (0x1) 	Unused (0x1) 	Tag index (0x1)
+flink/blink 	Flink (0x4) 	Blink (0x4)
+Data 	
+
+Microsoft released some mitigations to prevent attacks on unlinking of the freelist entry, below is a short description of the mitigations.
+
+Safe unlinking of the freelist:
+Safe unlinking is a protection mechanism implemented by Microsoft in Windows XP Sp2 and above. Essentialy it is an exploitation mitigation that attempts to prevent the generic write 4 technique as discussed in Heap Overflows for Humans 101. In this check, the previous chunks 'flink' points to our allocated chunk and the adjacent chunks blink points to our allocated chunk. Below is a description and diagram of the security mechanism in place.
+
+Freelist chunk 1[flink] == Freelist chunk 2 && Freelist chunk 3[blink] ==Freelist chunk 2
+
+
+ 
+
+ 
+
+The lines indicted with red is where the check is performed.
+
+ 
+
+ 
+
+If any of the checks fail, then a jump to 0x7c936934 is made into ntdll.dll. As you can see it is almost the same as our traditional unlink except that we have added code that checks the flink/blink.
+
+Freelist header cookies:
+The introduction of Windows XP SP2 saw a random heap cookie placed inside the chunk headers at offset 0x5. Only the freelist chunks have these cookie checks. Below is an image of a heap chunk with the security cookie highlighted. This is a random single byte entry and as such has a maximum possible randomization of 256 possible values. Keep in mind that you might be able to bruteforce this value in a multi threaded environment.
+
+ 
+The frontend allocator - Lookaside
+
+The lookaside list is a singly linked list used to store heap chunks that are under 1016 bytes (max: 1016+8). The idea behind the lookaside list is to enable speed and rapid lookup time. This is because applications execute multiple HeapAlloc()'s and HeapFree()'s during the processes run-time. Because it was designed for speed and efficiency, it allows no more than 3 free chunks per list entry. If HeapFree() is called on a chunk and there are already 3 entries for that particular chunk size, then it is freed to the Freelist[n].
+
+The heap chunk size is always calculated to the actual size of the allocation + an additional 8 bytes due to its header. So if the allocation is made for 16 bytes, then the lookaside list would be scanned for chunk sizes of 24 bytes (16 + chunk header). In the case of the below diagram, the windows heap manager would succeed and find an available chunk at index 2 of the lookaside list.
+
+The lookaside list contains only an flink pointing to the next available chunk (user data).
+Headers 	Self Size (0x2) 	Prev Size (0x2) 	Cookie (0x1) 	Flags (0x1) 	Unused (0x1) 	Segment index (0x1)
+flink/blink 	Flink (0x4) 	
+Data 	
+
+ 
+
+ 
+
+When the windows heap manager gets an allocation request, it looks for a free chunks of heap memory that can fulfil the request. For optimization and speed, the windows heap manager will first walk the lookaside list to begin with (due to its singly linked list structure) and try to find a free chunk. If the chunk is not found here, the windows heap manager will try the back-end allocator. This is where the heap manager will walk the freelist (between freelist[1]-freelist[127]). If no chunk is found, then it will walk the freelist[0] entry for a larger chunk and then split the chunk. A portion will be returned to the heap manager and the rest will return to freelist[n] (n is the index based on the remaining bytes in size). This brings us to the next section, heap operations.
+Basic Heap Operations
+
+Chunk splitting:
+Chunk splitting is the process of accessing freelist[n] for a sizeable chunk and breaking it down into smaller chunks. When a chunk is accessed at the freelist that is bigger than the requested allocation size, the chunk will be split in half to meet the requested allocation size.
+
+Suppose at freelist[0] this is a single chunk of size 2048 bytes. If the requested allocation size is 1024 bytes (including the header), then the chunk is split and the 1024 byte chunk size is put back into freelist[0] whilst returning the newly allocated chunk of 1024 bytes to the caller.
+
+Heap Coalescing:
+Heap coalescing is the act of joining together two adjacent chunks of heap memory that are free when the centre chunk is also freed.
+
+The reason why the heap manager will do this is to perform effective use of the segment memory. Of course, there is a trade off on efficiency when chunks are freed. Heap coalescing is a very important operation because multiple chunks can be added together (once free) and be used for other allocations of a larger size later on. If this process didn't happen, then wasted chunks would occur in the heap segment and would be fragmented.

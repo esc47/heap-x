@@ -1,0 +1,46 @@
+Heap segments
+
+As mentioned before, every heap chunk is stored in a heap segment. If a chunk of memory is freed, it will be added to the freelist or lookaside list in addition to being stored in the heap segment. When allocating, if the heap manager can't find any available free chunks in the lookaside or the freelist, it will 'commit' more memory to the current heap segment from the uncommitted space. A heap structure can have many segments if lots of memory is being committed due to many allocations. Below is an table showing the segment chunk structure.
+
+
+Header 	Self Size (0x2) 	Prev Size (0x2) 	Segment index (0x1) 	Flag (0x1) 	Unused (0x1) 	Tag index (0x1)
+Data
+
+When analysing heap segments, we use the '!heap -a [heap address]' command in windbg.
+
+ 
+
+ 
+
+Additionally you can use the '!heap -h [heap address] -c' in immunity debugger (the -c flag show chunks)
+
+ 
+
+ 
+
+Each segment contains its own meta data followed by the chunks of data inside the segment. This is the committed memory of the segment, and finally the segment contains a section of uncommitted memory. Now that we know the segment we want to analyse, we can use the command 'dt _heap_segment [segment address]' to dump the meta data structure.
+
+ 
+
+ 
+
+Below is a detailed table containing the structure of the segment meta data. For simplicity, we will start the address range at 0x00480000.
+
+
+Address 	Value 	Description
+0x00480008 	0xffeeffee 	Signature
+0x0048000C 	0x00000000 	Flags
+0x00480010 	0x00480000 	Heap
+0x00480014 	0x0003d000 	LargeUncommitedRange
+0x00480018 	0x00480000 	BaseAddress
+0x0048001c 	0x00000040 	NumberOfPages
+0x00480020 	0x00480680 	FirstEntry
+0x00480024 	0x004c0000 	LastValidEntry
+0x00480028 	0x0000003d 	NumberOfUncommitedPages
+0x0048002c 	0x00000001 	NumberOfUncommitedRanges
+0x00480030 	0x00480588 	UnCommitedRanges
+0x00480034 	0x00000000 	AllocatorBackTraceIndex
+0x00480036 	0x00000000 	Reserved
+0x00480038 	0x00381eb8 	LastEntryInSegment
+
+The important information in a segment is the first chunk. This information alone can be used to 'walk' the segment, as you can display the chunk and the next chunks simply by knowing the size and granularity.
