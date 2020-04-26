@@ -1,30 +1,26 @@
-Heap segments
+Сегменты кучи
 
-As mentioned before, every heap chunk is stored in a heap segment. If a chunk of memory is freed, it will be added to the freelist or lookaside list in addition to being stored in the heap segment. When allocating, if the heap manager can't find any available free chunks in the lookaside or the freelist, it will 'commit' more memory to the current heap segment from the uncommitted space. A heap structure can have many segments if lots of memory is being committed due to many allocations. Below is an table showing the segment chunk structure.
+Как уже было сказано, каждый чанк кучи хранится в сегементе. Если чанк освобождается, он добавляется во freelist или lookaside. При аллокации, если менеджер кучи не может найти свободный чанк в lookaside или во freelist, он выделит еще кусок памяти в текущем сегменте кучи. Структура кучи может хранить нескольколько сегментов в случае большого количества аллокаций. Ниже представлена таблица со структурой сегмента.
 
+При анализе сегментов кучи в windbg используется команда '!heap -a [heap address]'
 
-Header 	Self Size (0x2) 	Prev Size (0x2) 	Segment index (0x1) 	Flag (0x1) 	Unused (0x1) 	Tag index (0x1)
-Data
+###########################
+###########################
+###########################
 
-When analysing heap segments, we use the '!heap -a [heap address]' command in windbg.
+В Immunity Debugger для той же цели используется '!heap -h [heap address] -c' (флаг -c просит отобразить чанки)
 
- 
+###########################
+###########################
+###########################
 
- 
+Структура каждого сегмента состоит из своих собственных метаданных, за которыми следуют чанки данных, выделенные в этом сегменте. Это выделенная память сегмента. Всё остальное место в структуре занимает невыделенная память. Теперь, зная строение сегмента, мы может сдампить его метаданные командой 'dt _heap_segment [segment address]'.
 
-Additionally you can use the '!heap -h [heap address] -c' in immunity debugger (the -c flag show chunks)
+###########################
+###########################
+###########################
 
- 
-
- 
-
-Each segment contains its own meta data followed by the chunks of data inside the segment. This is the committed memory of the segment, and finally the segment contains a section of uncommitted memory. Now that we know the segment we want to analyse, we can use the command 'dt _heap_segment [segment address]' to dump the meta data structure.
-
- 
-
- 
-
-Below is a detailed table containing the structure of the segment meta data. For simplicity, we will start the address range at 0x00480000.
+Ниже представлена подробная таблица с метаданными из структуры сегмента. Для простоты мы установили начальный адрес 0x00480000.
 
 
 Address 	Value 	Description
@@ -43,4 +39,4 @@ Address 	Value 	Description
 0x00480036 	0x00000000 	Reserved
 0x00480038 	0x00381eb8 	LastEntryInSegment
 
-The important information in a segment is the first chunk. This information alone can be used to 'walk' the segment, as you can display the chunk and the next chunks simply by knowing the size and granularity.
+Важной частью в сегементе является первый чанк. Он содержит в себе данные, которые сами по себе позволяют "перемещаться" по сегменту, поскольку по ним можно просчитать, где находится следующий чанк, зная размер и [зернистость]

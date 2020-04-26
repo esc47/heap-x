@@ -1,270 +1,113 @@
-Techniques for bypassing Windows XP SP2/3 security mechanisms
-
-Overwriting a chunk of the lookaside:
-This technique is the most common technique to bypass heap cookies and safe unlinking checks. While this is an application specific technique to achieve a write 4 primitive, some applications may allow you to determine the heap layout enough for reliable exploitation. Since no safe unlinking or cookie checks occur in the lookaside list, an attacker can overwrite the 'flink' value contained within an adjacent lookaside entry and return that pointer via a HeapAlloc() or HeapFree() call only to later write malicious code in the next available chunk.
-
-Lets see how this works visually, breath in deep.
-
-1. We start by allocating chunk (A) in the current segment.
-
- 
-
- 
-
-2. Next we allocate another chunk (B) in the same segment
-
- 
-
- 
-
-3. Now we free chunk (B) to the lookaside list, so that two entries exist, one for the segment and one for the lookaside list.
-
- 
-
- 
-
-4. Now we overflow chunk (A) (That will later overflow into chunk B and update its flink). This is the meta data that will be overwritten.
-
- 
-
- 
-
-5. Now we allocate chunk (B) again (by allocating a chunk the same size as chunk B from step 2). This will return the pointer for chunk (B) and update its reference in the current heap segment and be ready for the next allocation. Now the flink is updated in chunk (B) to an arbitrary address that the attacker controls from the overflow of chunk (A).
-
- 
-
- 
-
-6. Now we take control by allocating chunk (C). This will be the next available chunk after chunk (B) and as such, be pointed too by chunk (B)'s controlled flink. The attacker fills chunk (C) with their shellcode.
-
- 
-
- 
-
-Once this process is complete, we have control of an overwritten function pointer that will ideally get called after our write 4 control. Below is the C code that we will demonstrate with.
-?
-/*
-        Overwriting a chunk on the lookaside example
-*/
-#include <stdio.h>
-#include <windows.h>
-int main(int argc,char *argv[])
-{
-        char *a,*b,*c;
-        long *hHeap;
-        char buf[10];
- 
-        printf("----------------------------\n");
-        printf("Overwrite a chunk on the lookaside\n");
-        printf("Heap demonstration\n");
-        printf("----------------------------\n");
- 
-        // create the heap
-        hHeap = HeapCreate(0x00040000,0,0);
-        printf("\n(+) Creating a heap at: 0x00%xh\n",hHeap);
-        printf("(+) Allocating chunk A\n");
- 
-        // allocate the first chunk of size N (<0x3F8 bytes)
-        a = HeapAlloc(hHeap,HEAP_ZERO_MEMORY,0x10);
-        printf("(+) Allocating chunk B\n");
- 
-        // allocate the second chunk of size N (<0x3F8 bytes)
-        b = HeapAlloc(hHeap,HEAP_ZERO_MEMORY,0x10);
- 
-        printf("(+) Chunk A=0x00%x\n(+) Chunk B=0x00%x\n",a,b);
-        printf("(+) Freeing chunk B to the lookaside\n");
- 
-        // Freeing of chunk B: the chunk gets referenced to the lookaside list
-        HeapFree(hHeap,0,b);
- 
-        // set software bp
-        __asm__("int $0x3");
- 
-        printf("(+) Now overflow chunk A:\n");
- 
-        // The overflow occurs in chunk A: we can manipulate chunk B's Flink
-        // PEB lock routine for testing purposes
-        // 16 bytes for size, 8 bytes for header and 4 bytes for the flink
- 
-        // strcpy(a,"XXXXXXXXXXXXXXXXAAAABBBB\x20\xf0\xfd\x7f");
-        // strcpy(a,"XXXXXXXXXXXXXXXXAAAABBBBDDDD");
- 
-        gets(a);
- 
-        // set software bp
-        __asm__("int $0x3");
- 
-        printf("(+) Allocating chunk B\n");
- 
-        // A chunk of block size N is allocated (C). Our fake pointer is returned
-        // from the lookaside list.
-        b = HeapAlloc(hHeap,HEAP_ZERO_MEMORY,0x10);
-        printf("(+) Allocating chunk C\n");
- 
-        // set software bp
-            __asm__("int $0x3");
- 
-        // A second chunk of size N is allocated: our fake pointer is returned
-        c = HeapAlloc(hHeap,HEAP_ZERO_MEMORY,0x10);
- 
-        printf("(+) Chunk A=0x00%x\n(+)Chunk B=0x00%x\n(+) Chunk C=0x00%x\n",a,b,c);
- 
-        // A copy operation from a controlled input to this buffer occurs: these
-        // bytes are written to our chosen location
-        // insert shellcode here
-    gets(c);
- 
-        // set software bp
-            __asm__("int $0x3");
- 
-        exit(0);
- }
+Методы обхода механизмов защиты Windows XP SP2/3
 
-The reason why we have a few __asm__("int $0x3"); instructions is to set software breakpoints to pause execution within the debugger. Alternatively you can open the compiled binary in the debugger and set breakpoints at each of the calls. Build the code in dev c++ (it uses AT&T in-line assembly compiling with gcc.exe). When running the code we hit the first break point while in the debugger, lets take a look.
+Перезапись чанка в lookaside
+Этот самый распространённый метод обхода кук и безопасного разрыва связи в списке. Несмотря на то, что его успешность зависит от приложения, в котором она используется, некоторые из них позволяют изучить структуру кучи, чтобы быть уверенным в надёжности эксплуатации. Посколько в lookasode не производятся проверка на разрыв связи или проверка кук, атакующий может переписать указатель flink в соседнем элементе и вернуть его через HeapAlloc() или HeapFree(), чтобы позже записать вредоносный код в следующий доступный чанк.
 
- 
+Давайте посмотрим, как это работает. Глубокий вдох...
 
- 
+1. Начинаем с аллокации чанка A в текущем сегменте.
 
-We can see that we have two allocated chunks in the segment 0x00480000 at the size of 0x18. If we subtract 0x8 bytes from that value we are left with 0x10 or 16 bytes. Lets take a look at the lookaside and see if we actually freed chunk (B) too that location.
+№№№№№№№№№№№№№№№№№№№№№№№№
 
- 
+2. Аллоцируем еще один чанк B там же.
 
- 
+3. Теперь освобождаем чанк B, он отправляется в список lookaside. С этого момента у нас есть два чанка: один в сегменте, другой в lookaside.
 
-Excellent! So we can see our chunk on the lookaside, (less 8 bytes so it points to the header). This chunk got freed to this location due to its size being < 1016 and there being <= 3 chunks in the lookaside for that particular chunk size.
+4. Переполняем чанк А (впоследствии его содержимое попадёт в B, обновив flink). Это метаданные, которые будут перезаписаны.
 
-Just to be sure, lets take a look at the freelist and see what's up.
+5. Аллоцируем чанк B снова (просим чанк такого же размера, как в шаге 2). Нам вернётся указатель на B, а менеджер кучи обновит данные сегмента для подготовки к следующей аллокации. В flink чанка B теперь указывает на произвольный адрес, который контролируется атакующим.
 
- 
+6. Наконец, получаем управление, аллоцируя чанк C. Он будет слудующим доступным после B, а значит будет указывать туда же, куда указывает flink чанка B. Теперь атакующий записывает в C шеллкод.
 
- 
 
-Ok so it seems straight forward, no entries except some at freelist[0] which is normal on creation of a segment and a few allocations. Pressing along, we overflow chunk A with some 0x41's to overflow the chunk, and the adjacent chunks header. With the same data, we will overflow the adjacent chunks flink using 0x44's.
+По окончанию этого процесса у нас будет контроль над указателем на функцию, которая в идеале будет вызвана после нашей "перезаписи четвёрки". Ниже приведён C код для демонстрации.
 
- 
+Задачей нескольких ассемблерных вставок  __asm__("int $0x3"); заключается в остановке выполнения программы по брекпойту в отладчике. Точно так же вы можете открыть бинарник в отладчике и вручную их установить на каждом вызове. После запуска, мы остановимся на первом брекпойнте. Давайте посмотрим
 
- 
+№№№№№№№№№№№
 
-Great so we can see that our allocation at 0x00481ea8-0x8 (chunk B) has been overwritten by the attackers input. We can also see the lookaside entry contains the value 0x4444443c. If we add 0x8 bytes to this value, it will become 0x44444444, the exact value we just used! So at this point, you can understand how you are controlling the flink of chunk B. :)
+Мы видим два аллоцированных чанка в сегменте 0x00480000 размером 0x18 байт. Если отнять из этого числа 0x8, получим 0x10 то есть 16 байт. Взглянем на содержимое lookaside, чтобы проверить, поместился ли в него B при освобождении.
 
-Once an allocation for the same size as chunk B (0x00481ea8-0x8) has been made, chunk B's entry will be removed from the lookaside[3] entry and returned to the caller. Note that additionally, the headers are under our full control as well.
 
- 
+Превосходно! Чанк помещён в lookaside (на 8 байт меньше, потому что указывает на заголовок). Этот чанк поместился сюда, потому что его размер меньше 1016 и в lookaside находится меньше 3 чанков такого же размера.
 
- 
+Для уверенность заглянем во freelist
 
-So if we have a look at chunk A (0x00481e88) we can see the chunk is in use because the flag is set to 0x1 (indicating that it is busy). The next chunk at (0x00481ea0) is not updated yet as it is still freed at this point to the lookaside.
+#################
 
- 
+Хорошо, всё выглядит нормально. Внутри нет элементов, за исключением нескольких во freelist[0], но они появляются при создании сегмента и паре других аллокаций. Двигаясь дальше, мы переполняем чанк A строкой из байтов 0x41 до заголовка соседнего чанка. Используя ту же строчку, перепишем в нём flink байтами 0x44.
 
- 
 
-At this point, the code will access violate on a READ operation. When attacking an application using this technique, we would replace the 0x44444444 with a function pointer (faking flink). Now, when the heap manager creates the next allocated chunk, the application will write at the location of the fake flink. We would now allocate chunk C and fill the buffer with arbitrary shellcode. The idea at this point is to have our function pointer called before the application crashes (or called due to the crash ;)). One very clever trick I did not mention in Heap Overflow for Humans 101 is that the attacker can use the PEB global function pointers (before XP SP1 only). However in windows XP SP2 and above, these address pointers are now randomized. Lets check this out, on loading the binary in the debugger the first time we see this:
 
- 
+Класс! Теперь мы видим наш аллокация по адресу 0x00481ea8-0x8 (чанк B) была перезаписана атакующей строкой. Также видно, что элемент lookaside содержит значение 0x4444443c. Добавим 0x8, и он превратится в 0x44444444. Именно то, что мы использовали! Теперь вы понимаете, как контролировать flink в чанке B. :)
 
- 
+Как только происходит аллокация чанка такого же размера как и B (0x00481ea8-0x8), он удаляется из lookaside[3] и возвращается вызывающему. Заметьте также, что заголовки также под нашим полным контролем.
 
-Now lets do it again:
+Взглянув на чанк A (0x00481e88) мы увидим, что он используется, потому что значение флага равно 0x1 (что говорит о том, что чанк занят). Следующий чанк по адресу 0x00481ea0 пока не обновлён и !!!!![.............]
 
- 
 
- 
 
-Note that the two PEB addresses are different. When an exception occurs, the exception dispatcher will likely call ExitProcess() which will in turn, call RtlAcquirePebLock(). This operation is conducted so that no modifications are made to the peb during the exception and once the handler is finished being dispatched, it will release the lock via a call to RtlReleasePebLock(). Additionally, the pointers used within these functions are not W|X protected meaning that we can write and execute in that memory region. Each of these functions make use of static pointers with a fixed offset from the peb. Below is the RtlAcquirePebLock() function and as you can see, FS:[18] (peb) is moved into EAX. Then at offset 0x30, the global function pointers are stored and at offset 0x24 is the function 'FastPebLockRoutine()' that will be called.
+В этом месте код попытается нарушить доступ операцией READ. При атаке приложения этим методом, мы заменим 0x44444444 указателем на функцию (подделаем flink). Теперь, когда менеджер кучи создаст свежеаллоцированный чанк, приложение будет писать в ту часть памяти, куда указывает поддельный flink. Аллоцируем чанк C и запишем в него произвольный шеллкод. Задача при этом, чтобы наша функция была вызвана до краша приложения (или хотя бы во время краша ;)). В первой части я не упомянул про один классный хак с использованием глобальных указателей PEB (работает только до XP SP1). Однако в SP2 и выше эти указатели теперь рандомизируюся. Давайте откроем бинарник в отладчике:
 
-7C91040D > 6A 18            PUSH 18
-7C91040F   68 4004917C      PUSH ntdll.7C910440
-7C910414   E8 B2E4FFFF      CALL ntdll.7C90E8CB
-7C910419   64:A1 18000000   MOV EAX,DWORD PTR FS:[18]
-7C91041F   8B40 30          MOV EAX,DWORD PTR DS:[EAX+30]
-7C910422   8945 E0          MOV DWORD PTR SS:[EBP-20],EAX
-7C910425   8B48 20          MOV ECX,DWORD PTR DS:[EAX+20]
-7C910428   894D E4          MOV DWORD PTR SS:[EBP-1C],ECX
-7C91042B   8365 FC 00       AND DWORD PTR SS:[EBP-4],0
-7C91042F   FF70 1C          PUSH DWORD PTR DS:[EAX+1C]
-7C910432   FF55 E4          CALL DWORD PTR SS:[EBP-1C]
-7C910435   834D FC FF       OR DWORD PTR SS:[EBP-4],FFFFFFFF
-7C910439   E8 C8E4FFFF      CALL ntdll.7C90E906
-7C91043E   C3               RETN
 
 
- 
 
-Below we can see the function RtlReleasePebLock() directly calls the function pointer 'FastpebUnlockRoutine()' at offset 0x24 of the global array offset within the peb.
+Повторим:
 
-7C910451 > 64:A1 18000000   MOV EAX,DWORD PTR FS:[18]
-7C910457   8B40 30          MOV EAX,DWORD PTR DS:[EAX+30]
-7C91045A   FF70 1C          PUSH DWORD PTR DS:[EAX+1C]
-7C91045D   FF50 24          CALL DWORD PTR DS:[EAX+24]
-7C910460   C3               RETN
 
 
- 
+Заметьте, что два адреса PEB отличатся. При вызове исключения диспетче исключений скорее всего вызовет ExitProcess(), который в свою очередь вызовет RtlAcquirePebLock(), блокируя PEB. Это происходит для того, чтобы не допустить изменения PEB во время исключения. Как только обработчик завершается, блок снимается вызовом RtlReleasePebLock(). К тому же указатели, используемые в этих функциях не имеют защиты W|X (Write, eXecute). Что значит, мы можем писать данные в эту часть памяти и выполнять её содержимое. Каждая из этих функций использует статические указатели на фиксированное смещение в PEB. Ниже показан код RtlAcquirePebLock(). FS:[18] (peb) присваивается EAX. Затем по смещению 0x30 сохраняются указатели на глобальные функции, а по смещению 0x24 - функция FastPebLockRoutine(), которая затем вызывается.
 
-So when the RtlAcquirePebLock() and RtlReleasePebLock() routines are called once an exception occurs, the code will continually trigger an exception and execute your code at infinitum. However you can patch the peb by executing your shellcode and then modifying the pointer location to point to exit() instead.
 
- 
+Ниже представлено как RtlReleasePebLock() делает прямой вызов функции FastpebUnlockRoutine(), находящейся по смещению 0x24 в массиве глобальных функций внутри PEB.
 
- 
 
-The more threads in the current process, the less randomization there is (the randomized addresses will be used for multiple PEB's) and we would be able to 'guess' the address of the current PEB. However the problem still lies in the fact that we do not have a reliable function pointer to overwrite for our write 4 primitive (a generic function pointer). Some times an application may use a custom function pointer either before an exception occurs or a function pointer in another windows library is called and this can be leveraged to overwrite that pointer with our code and execute the shellcode.
+Поэтому, когда при исключении вызываются  RtlAcquirePebLock() и RtlReleasePebLock(), ваш код будет вызываться раз за разом до бесконечности. Но вы можете пропатчик PEB при вызове своего шеллкода, заменить указатель так, чтобы он содержал адрес функции exit().
 
 
-Specific pointer exploitation:
-For the purpose of demonstration, I will perform the overwriting a chunk on the lookaside under windows XP SP1 due to the fixed PEB Global function pointers. The FastPEBLockRoutine() is located at 0x7ffdf020.
 
-Simply uncomment this line:
-?
-// strcpy(a,"XXXXXXXXXXXXXXXXAAAABBBB\x20\xf0\xfd\x7f");
+Чем больше текущий процесс содержит тредов (потоков), тем меньше используется рандомизации (рандомизированные адреса используются для нескольких PEB'ов), что даёт возможность "угадать" адреса в текущего PEB. Но это не решает нашу проблем, потому что у нас нет надежного способа записи четвёрки, что бы позволило перезаписать указатель на функцию. Иногда само приложени использует нестандартный указатель либо до исключения, либо как указатель на другую библиотеку Windows. Мы можем переписать его так, чтобы он указывал на наш шеллкод.
 
-and comment out this line:
-?
-gets(a);
 
-So now we will overflow chunk A X's and overflow into chunk B's metadata with AAAA and BBBB and finally overwrite chunk B's flink with 0x7ffdf020. Recompile and load it into the debugger. Now when we allocate chunk C (pointed to by 0x7ffdf020), we can fill the chunk with shellcode and it will be called when an exception occurs. Below, we can see the following code setting up EAX to contain the PEB location and a direct call is made at offset 0x20 (FastPEBLockRoutine()) transferring execution to our code.
 
- 
+Особенности эксплуатации указателей:
+Для демонстрации я проведу переполнения чанка в lookaside в Windows XP SP1 (потому что глобальные указатели PEB в ней фиксированы). FastPEBLockRoutine() находится по адресу 0x7ffdf020.
 
- 
+Раскомментируйте эту строку:
 
-Now we have direct control over EIP and can use it to return into code. From here it is trivial to bypass DEP and get code execution.
 
-Application specific pointer exploitation:
-This article would not be complete unless I provided an example of exploiting this vulnerability using an application specific pointer under Windows XP SP3. When targeting software that contains a heap overflow, any hard-coded function call that can be written to and is executed after the overflow's occurrence too should be targeted and abused. Take for example, WSACleanup() from winsock, it contains a hardcoded function call at 0x71ab400a under XP SP3. This can be used as a location in memory that we can write our shellcode too. That way when the WSACleanup() (or many other winsock functions) are executed, it will redirect back to shellcode. Below is the disassembly of WSACleanup() and finding the hardcoded function call.
+И закомментируйте эту:
 
- 
 
- 
+Теперь мы переполним чанк A строкой из X'ов и перепишем часть чанка B строками AAAA и BBBB и, наконец, перепишем указатель на flink значением 0x7ffdf020. Скомпилируйте программу заново и откройте в отладчике. Аллоцировав чанк C (находящийся по адресу  0x7ffdf020), мы можем записать в него шеллкод, который будет вызван при исключении. Ниже можно увидеть, как в EAX записывается адрес PEB и происходит прямой вызов FastPEBLockRoutine(), что передаёт управление нашему коду.
 
-Almost any networking application under windows is likely to use exported function calls from winsock and specially WSACleanup() is used to clean up any socket connections and as such almost guaranteed to be executed after a heap overflow. Because of this, using this function pointer (0x71ac4050) to overwrite at seems to work quite consistently. As another example shows, the recv() function also contains a call to the same function.
 
- 
 
- 
+Имея полный контроль над EIP, его можно использовать для возвращение обратно в код. С этого момента можно с лёгкостью обойти DEP и добиться исполнени кода.
 
-If we follow the function call at 0x71ab678f, we can see we land here:
 
- 
+Эксплуатация указателей, определяемая приложением:
+Эта статья будет неполной, если я не представлю пример эксплуатации этой уязвимости в Windows XP SP3. При работе с приложениями, содержащими переполнение буфера любой захардкоженый вызов функции, который можно перезаписать и выполнить после переполнения должен быть использован. К примеру WSACleanup() из библиотеки winsock. Он содержит захардкоженный вызов 0x71ab400a в XP SP3. В этом месте мы можем поместить наш шеллкод. Таким образом при вызове WSACleanup() (или других функций winsock), будет вызван наш код. Ниже дизассемлированный код WSACleanup() и поиск захардкоженных вызовов.
 
- 
 
-What do you know? another deference call at 0x71ac4050, just to confirm that this will succeed, lets look at the access permissions of the memory.
+Почти любое приложение в Windows скорее всего искольет функции winsock. В частности WSACleanup() используется для очистки любых соединений, что практически гарантирует вызов после переполнения. По этой причине перезапись по адресу 0x71ac4050 работает так устойчиво. Другим примером будет функция recv, которая тоже вызывает эту функцию.
 
- 
 
- 
+Если послезовать за вызовом 0x71ab678f, мы попадём сюда:
 
-The fundamental problem with this technique is that because you will be overwriting at that location, any shellcode that uses winsock (practically all i might add) will fail. One way to solve this is to patch the 0x71ac4050 location with the original code again so that winsock calls will work.
+Кто бы мог подумать? Еще один вызов 0x71ac4050. Чтобы удостовериться, что это сработает, взглянем на права доступа.
 
-Application specific heap exploitation example:
-I have provided a vulnerserver binary (most of the code is used from Stephen Bradshaws blog entry at the infosec institute, all credits should go to him) and adjusted it accordingly to contain heap overflows and memleaks.
 
-The idea is to build a 'PoC' exploit that will trigger and layout the heap in the right way so that you can overwrite a chunk on the lookaside and gain code execution. Download this (b33f: File not available) file and run it under windows XP SP 3 and try the examples provided here to help you grasp the concept of this technique. I have decided not to share the source code for now so that people will have to do some reverse engineering in order to find the right way to layout the heap and trigger code execution. As a hint (hopefully not too big), here is a screenshot of the 'PoC' code working by determining the heap layout:
 
- 
 
- 
+Фундаментальным недостатком этого метода является то, что при перезаписи кода по этому адресу, любой шеллкод, использующий winsock (я бы сказал, практически все) перестанет работать. Одним из вариантов решения - патчить 0x71ac4050 оригинальным кодом, чтобы вызовы winsock продолжили работать.
 
-Of course, any situation in which you can layout heap memory is perfect. An easier target for laying out a target processes heap is to use the client side as a reliable way. With the ability to script and control heap layouts, you are sure to be able to setup a situation in that can be exploited via a heap overflow. An example is using Alex Soritov's heaplib.js to help allocate, free and perform many other operations on strings within heap memory. If using JavaScript or DHTML to allocate or free chunks in the same heap used by MSHTML, then you can control the heap manager and you can redirect execution control from a heap overflow in the target browser.
+
+Пример эксплуатации указателей, определяемых приложением:
+
+Я предоставил бинарник vulnerserver (большая часть кода взята из блога Стивена Бредшоуса (Stephen Bradshaws) из Infosec Institute, вся слава принадлежит ему) и подправил его так, чтобы он содержал переполнения кучи и утечки памяти.
+
+Идея состоит в том, чтобы написать PoC эксплойт, который при запуске будет выстаивать структуру кучи так, что вы можете переписать чанк в lookaside и получить контроль над выполнением. Скачайте этот файл (b33f: файл недоступен) и запустите его в Windows SP3. Попробуйте примеры, о которых я рассказывал выше, это поможет вам лучше понять, как работает этот метод. Я решил, что пока не буду предоставлять исходник, чтобы люди занялись реверс инжинирингом и сами поняли, как добиться правильной структуры внутри кучи и вызвать свой код. В качестве подсказки (надеюсь не слишком большой) привожу скриншот, на котором PoC определяет структуру кучи:
+
+Разумеется, любая ситуация, в которой вы можете манипулировать со структурой кучи, идеальна. [!!!!...............]
+При возможни заскриптовать и контролировать структуру кучи, вы без проблемы будете способны добиться ситуации, которую можно эксплуатировать с помощью переполнения буфера. В качестве примера можно привести heaplib.js Алекса Соритова, которая позволяет аллоцировать и освобождать память и производить множество операций со строками внутри кучи. Если вы используете JavaSctipt или DHTML для аллокации или освобождения чанков в той же куче, что и MSHTML, значит вы можете контролировать менеджер кучи и перенаправлять поток исполнения внутри целевого браузера.

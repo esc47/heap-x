@@ -1,68 +1,57 @@
-The back-end allocator - Freelist
+Бэкэнд аллокатор - Freelist
 
-At offset 0x178 of the heap structure, we can see the start of the FreeList[] array. The FreeList contains a doubly linked list of chunks. They are doubly linked due to containing both flink and blink.
+По смещению 0x178 в структуре кучи находится массив Freelist[]. Он содержит двусвязный список чанков. Двусвязность достигается засчёт указателей flink и blink.
 
- 
+Диаграмма выше показывает, что freelist содержит чанки от 0 до 128. Любой размер чанка между 0 и 1016 байтам (максимальный размер равен 1024, минис 8 байт на метаданные) занимает [размер] * 8 байт. К примеру, у меня есть чанк размером 40 байт. Тогда он будет иметь в массиве индекс 4 (40 / 8).
 
- 
+Если размер превышает 1016 (127 * 8) байта, тогда он будется храниться во freelist[0] в порядке возрастания. Ни представлено описание чанка во freelist.
 
-The above diagram shows that the freelist contains an indexed array of heap chunks ranging from 0-128. Any chunk sizes between 0 and 1016 (its 1016 because the maximum size is 1024 - 8 bytes of metadata) are stored according to their allocated unit size * 8. For example, say that I have a chunk of 40 bytes to free, then I would place the chunk at index 4 of the freelist (40/8).
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
 
-If a chunk size was above 1016 ( 127 * 8 ) bytes, then it would be stored in the freelist[0] entry in numerical size ordering. Below is a description of the freelist chunk.
+Microsoft добавила некоторые ограничения, чтобы защититься от unlink-атак в структурах freelist. Ниже представлен их короткий список.
 
+Безопасный разрыв связи во freelist:
+Этот механизм был реализован в XP SP2 и выше. В сущности эта техника не позволяет провести атаку, описанную в первой части "Переполнения буфера кучи для людей". Она проверяет, что flink предыдущего чанка указавает на текущий аллоцированный чанк, как и blink следующего чанка. Ниже описание и демонстрация механизма.
 
-Headers 	Self Size (0x2) 	Prev Size (0x2) 	Segment index (0x1) 	Flag (0x1) 	Unused (0x1) 	Tag index (0x1)
-flink/blink 	Flink (0x4) 	Blink (0x4)
-Data 	
+№№№№№№№№№№№№№№№№№№№№№№№№№№
+№№№№№№№№№№№№№№№№№№№№№№№№№№
+№№№№№№№№№№№№№№№№№№№№№№№№№№
 
-Microsoft released some mitigations to prevent attacks on unlinking of the freelist entry, below is a short description of the mitigations.
+Механизм проверяет указатели, помеченные красными линиями
 
-Safe unlinking of the freelist:
-Safe unlinking is a protection mechanism implemented by Microsoft in Windows XP Sp2 and above. Essentialy it is an exploitation mitigation that attempts to prevent the generic write 4 technique as discussed in Heap Overflows for Humans 101. In this check, the previous chunks 'flink' points to our allocated chunk and the adjacent chunks blink points to our allocated chunk. Below is a description and diagram of the security mechanism in place.
+№№№№№№№№№№№№№№№№№№№№№№№№№№
+№№№№№№№№№№№№№№№№№№№№№№№№№№
+№№№№№№№№№№№№№№№№№№№№№№№№№№
 
-Freelist chunk 1[flink] == Freelist chunk 2 && Freelist chunk 3[blink] ==Freelist chunk 2
-
-
- 
-
- 
-
-The lines indicted with red is where the check is performed.
-
- 
-
- 
-
-If any of the checks fail, then a jump to 0x7c936934 is made into ntdll.dll. As you can see it is almost the same as our traditional unlink except that we have added code that checks the flink/blink.
+Если какая-либо из проверок не проходит, производится прыжок по адресу 0x7c936934 в ntdll.dll. Как можете заметить, это почти то же самое, что мы делали при обычном разрыве связи, за исключением того, что теперь проверяется flink/blink.
 
 Freelist header cookies:
-The introduction of Windows XP SP2 saw a random heap cookie placed inside the chunk headers at offset 0x5. Only the freelist chunks have these cookie checks. Below is an image of a heap chunk with the security cookie highlighted. This is a random single byte entry and as such has a maximum possible randomization of 256 possible values. Keep in mind that you might be able to bruteforce this value in a multi threaded environment.
+Также в SP2 появился механизм, добавляющий в заголовок чанка по смещеню 0x5 рандомный куки. Толко чанки в freelist проверяются на них. Ниже показан чанк с подвеченной кукой. Это рандомный байт, поэтому имеет всего 256 возможных значений. Помните, что в многозадачной среде вы можете его просто перебрать брутфорсом.
 
- 
-The frontend allocator - Lookaside
+Фронтэнд аллокатор - Lookaside
 
-The lookaside list is a singly linked list used to store heap chunks that are under 1016 bytes (max: 1016+8). The idea behind the lookaside list is to enable speed and rapid lookup time. This is because applications execute multiple HeapAlloc()'s and HeapFree()'s during the processes run-time. Because it was designed for speed and efficiency, it allows no more than 3 free chunks per list entry. If HeapFree() is called on a chunk and there are already 3 entries for that particular chunk size, then it is freed to the Freelist[n].
+Список lookaside является односвязным и хранит чанки размером до 1016 байт (max: 1024-8). Он нужен для ускорения поиска. Оно достигается, когда приложение использует множество вызовов HeapAlloc() и HeapFree() во время выполнения. Поскольку он должен быть быстрым, в одном его элементе может хранить не больше 3 свободных чанков. Если при вызове HeapFree() в списке уже есть 3 элемента с таким размером, то освобождаемый чанк добавляется во freelist[n].
 
-The heap chunk size is always calculated to the actual size of the allocation + an additional 8 bytes due to its header. So if the allocation is made for 16 bytes, then the lookaside list would be scanned for chunk sizes of 24 bytes (16 + chunk header). In the case of the below diagram, the windows heap manager would succeed and find an available chunk at index 2 of the lookaside list.
+Размер чанка кучи всегда рассчитывается как размер аллокации + дополнительные 8 байт на заголовок. Тогда при запросе 16 байт в списке lookaside будет искаться 24-байтный чанк (16 + заголовок). В случае, описанном диаграмой ниже, менеджер кучи найдет такой чанк во втором элементе списка.
 
-The lookaside list contains only an flink pointing to the next available chunk (user data).
-Headers 	Self Size (0x2) 	Prev Size (0x2) 	Cookie (0x1) 	Flags (0x1) 	Unused (0x1) 	Segment index (0x1)
-flink/blink 	Flink (0x4) 	
-Data 	
+lookaside хранит только указатель на следующий чанк данных flink.
 
- 
+№№№№№№№№№№№№№№№№№№№№№№№№№№№№№№
+№№№№№№№№№№№№№№№№№№№№№№№№№№№№№№
+№№№№№№№№№№№№№№№№№№№№№№№№№№№№№№
 
- 
+Когда менеджеру кучи приходит запрос на аллокацию, он ищет удовлетворяющие ему свободные чанки. Для ускорения и оптимизации менеджер сперва пройдётся по списку lookaside. Если там его не найдётся, будет использован бэкэнд аллокатор. В этом случае будет произведён проход по списку freelist, начиная с freelist[1] до freelist[127]. Если свободный чанк не найдётся, будет просмотрел элемент freelist[0] в попытке найти чанк с большим размером, который потом будет разделён. Нужная часть будет возвращена менеджеру, а остатки отправятся во freelist[n] (n определяется по количествую оставшихся байтов). Это ведёт нас к следующей части, операциям кучи.
 
-When the windows heap manager gets an allocation request, it looks for a free chunks of heap memory that can fulfil the request. For optimization and speed, the windows heap manager will first walk the lookaside list to begin with (due to its singly linked list structure) and try to find a free chunk. If the chunk is not found here, the windows heap manager will try the back-end allocator. This is where the heap manager will walk the freelist (between freelist[1]-freelist[127]). If no chunk is found, then it will walk the freelist[0] entry for a larger chunk and then split the chunk. A portion will be returned to the heap manager and the rest will return to freelist[n] (n is the index based on the remaining bytes in size). This brings us to the next section, heap operations.
-Basic Heap Operations
+Базовые операции кучи
 
-Chunk splitting:
-Chunk splitting is the process of accessing freelist[n] for a sizeable chunk and breaking it down into smaller chunks. When a chunk is accessed at the freelist that is bigger than the requested allocation size, the chunk will be split in half to meet the requested allocation size.
+Разделение чанка:
+Просесс получения из freelist[n] большого чанка, который разбивается на маленькие. Если полученный чанк больше запрошенного размера, чанк разбивается так, чтобы удовлетворить запрос.
 
-Suppose at freelist[0] this is a single chunk of size 2048 bytes. If the requested allocation size is 1024 bytes (including the header), then the chunk is split and the 1024 byte chunk size is put back into freelist[0] whilst returning the newly allocated chunk of 1024 bytes to the caller.
+Предположим во freelist[0] лежит всего один чанк размером 2048 айт. Если запрашивается выделение 1024 байт (с учётом заголовка), тогда этот чанк делится, один кусок в 1024 байта отправлятеся назад во freelist[0], а другой возвращается.
 
-Heap Coalescing:
-Heap coalescing is the act of joining together two adjacent chunks of heap memory that are free when the centre chunk is also freed.
+Слияние кучи:
+Процесс объединение в один трёх соседних свободных чанков. Происходит при освобождении среднего из них, два боковых должны быть уже свободными.
 
-The reason why the heap manager will do this is to perform effective use of the segment memory. Of course, there is a trade off on efficiency when chunks are freed. Heap coalescing is a very important operation because multiple chunks can be added together (once free) and be used for other allocations of a larger size later on. If this process didn't happen, then wasted chunks would occur in the heap segment and would be fragmented.
+Причина, по которой это делается заключается в эффективном использовании сегемента памяти. Разумеется, освобождение чанков не всегда эффективно. Слияние кучи является очень важной операций, поскольку при этом несколько свободных чанков объединяются в один, который может быть позже использован для аллокации бОльшего размера позднее. Если этого не делать, сегмент будет заполнятся неиспользуемыми чанками, а также будет всё более фрагментирован.
