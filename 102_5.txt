@@ -1,80 +1,52 @@
-Analysis of AOL 9.5 (CDDBControl.dll) ActiveX Heap Overflow
+Анализ AOL 9.5 (CDDBControl.dll) Переполнение буфера кучи ActiveX
 
-I decided to take a look at this vulnerability and determine the 'exploitability' of this bug under windows XP SP3. Despite the control being marked not safe for scripting or initialization, I thought it might be an interesting bug to analyse. I wouldn't have added this section, but sinn3r asked, so I decided to add it :) Now due to it being within an ActiveX control, one of the ways that it can be triggered is through IE's browser using a scripting language of choice. I decided to use JavaScript simply because it was the most flexible and heapLib.js was also written in it.
+Я решил рассмотреть эту уязвимость и оценить "эксплуатабельность" этоо бага в Windows XP SP3. Несмотря на то, что [управление] было помечено как небезопасное, я подумал, что его будет любопытно проанализировать. Я не хотел добавлять эту часть, но sinn3r попросил, и я добавил :). Поскольку всё управляется контроллером ActiveX, один из способов добраться до бага - через IE, используя скриптовый язык. Я решил использовать JavaScript просто потому что он самый гибкий и на нём написана heapLib.js.
 
-My environment was as follows:
+Моя среда:
 - IE 6/7
 - XP SP3
 - heapLib.js
 
-So let the fun begin! First of all I triggered the PoC provided at exploit-db by Hellcode Research. Lets analyse the crash:
+Да начнётся веселье! В первую очередь я добился запустил PoC с  exploit-db написанный Hellcode Research. Проанализируем краш:
 
- 
+№№№№№№№№№№№№№№№№№№№
+№№№№№№№№№№№№№№№
+№№№№№№№№№№№№№№№№№
 
- 
-
-What we can see here is the segment in the current heap actually runs out of uncommitted memory and cannot commit more memory for that heap segment.
-
- 
-
- 
-
-And if we view it:
-
- 
-
- 
-
- 
-
- 
-
-We run out of the heap segment without the ability to create another segment. So what do we do? Well we know that we have to trigger an unlink operation. In order to do that, we need the windows heap manager to copy all the data into the allocate buffer (overwriting other chunks) but not running off the current segment. Then when the next allocation or free is triggered, it will attempt to unlink. I modified the PoC to trigger the overflow with only 2240 bytes instead of 4000.
-?
-var x = unescape("%41");
-while (x.length<2240) x += x;
-x = x.substring(0,2240);
-target.BindToFile(x,1);
-
-Now when we trigger the bug, we don't actually crash the browser. Of course the chunk is overflowed, but until there is another unlink operation, it will not crash. But when closing the browser, the garbage collector runs and allocates all freed chunks and as such multiple calls to RtlAllocateHeap() are made and the bug is triggered. This time, things look a little more realistic.
-
- 
-
- 
-
-(384c.16e0): Access violation - code c0000005 (first chance)
-First chance exceptions are reported before any exception handling.
-This exception may be expected and handled.
-eax=41414141 ebx=02270000 ecx=02273f28 edx=02270178 esi=02273f20 edi=41414141
-eip=7c9111de esp=0013e544 ebp=0013e764 iopl=0         nv up ei pl nz na po nc
-cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010202
-ntdll!RtlAllocateHeap+0x567:
-7c9111de 8b10            mov     edx,dword ptr [eax]  ds:0023:41414141=????????
+Мы видим, что в сегменте текущей кучи кончилась свободная память и он не может выделять её в этом сегменте.
 
 
- 
 
-Great, so we have a potentially exploitable condition. In this case, flink is EAX and blink is EDI. Under XP sp0-1 and below, we could simply perform a basic UEF function overwrite and take control. But we have access to the browsers powerful scripting ability to 'massage' the heap so we will try targeting the vulnerability under XP SP3. When analysing the heap layouts, I quickly noticed that the Active X control actually creates its own heap at run time and the crash is triggered on a freelist insert.
 
- 
+Рассмотрим его:
 
- 
 
-When using the heapLib.js library, I was able to successfully manipulate the heap quite well, that is, the default processes heap **not** the active X controls heap. At this point, I can somewhat say that under Windows XP SP3 and above it *seems* to be unexploitable, of course this could be a gross misinterpretation but as far as I can tell, if the objects heap cannot be manipulated, then it cannot be exploited.
 
-Hooking:
-A useful tip to know when debugging applications that contain a heap overflow is the number of allocations and frees and what size they are. During a process/threads life, many allocations and frees are made and it certainly is time intensive to breakpoint all of them. One neat thing with immunity debugger is that you can use the !hookheap plugin to hook RtlAllocateHeap() and RtlFreeHeap() and so you can find the size and number of allocations/frees that are executed during any particular operation.
+Память в сегменте кончилась и у нас нет возможности создать новый сегмент. Что же нам делать? Что ж мы знаем, что придётся разрывать связь в списке чанков. Чтобы это сделать, нужно, чтобы менеджер кучи скопировал данные в аллоцирующий буффер (перезаписывая другия чанки), но не вылез за пределы текущего сегмента. Тогда при следующей аллокации или при попытке освободить чанк, произойдёт попытка разорвать связь. Я подправил PoC, чтобы переполнение срабатывало на 2240 байтах вместо 4000.
 
- 
+№№№№№№№№№№№№№№№№№№№
 
- 
+Сейчас, когда мы используем баг, мы на самом деле не крашим браузер. Конечно, чанк переполнен, но пока не произведен второй разрыв, он не будет падать. Однако при закрытии браузера, сборщик мусора будет проходить по всем аллокациям и освобождать чанки, тем самым много раз вызывая RtlAllocateHeap(), а значит и сам баг. В этом случае всё становится более реалистичным.
 
-And as you can see, one particular allocation stands out, an allocation of a large number of bytes seems to indicate a request to the target vulnerable server.
-Conclusion
+№№№№№№№№№№№№№№№№№№№№№№№№№№№№
 
-Heap managers are very complex to understand and to exploit heap overflows requires many man hours as each situation is different. Understanding the current context of the target application and limitations contained within it are key to determining the exploitability of a heap overflow. The protection mitigation's enforced by Microsoft prevent majority of heap overflow exploitation in a generic sense, however from time to time we see application specific situations that arise and can be abused by an attacker.
 
-References:
+Отлично! У нас есть потенциально эксплуатируемые условия. В этом случае в flink находится в EAX, а blink в EDI. В SP0-1 и ранее можно было просто провести обычное переполнение функций UEF и получить управление. Но у нас есть доступ к скриптовому механизму браузера, что позволит "массажировать" кучу в попытках использовать уязвимость в SP3. При анализе структуры кучи я быстро заметил, что контроллер ActiveX создаёт свою собственную кучу в рантайме. Краш при этом происходит при вставке во freelist.
+
+
+Используя heapLib.js мне удалось манипулировать кучей самого процесса, *не* кучей контроллера ActiveX. В этом месте я прихожу к выводу, что в Windows XP SP3 и выше это эксплуатация переполнения буфера кучи *выглядит* невозможной. Конечно, есть шанс серьёзной ошибки в интерпретации, но насколько я могу сказать, если нет возможности манипуляции с кучей, нет возможности эксплуатации.
+
+Хуки:
+При отладке приложений, содержащих переполнение кучи, полезно знать количество аллокаций и освобождений памяти, а также их размеры. Во время жизни процесса/потока их происходит очень много. Очевидно, за ними трудно следить через брекпойнты. В Immunity Debugger вы ожете использовать !hookheap плагин, чтобы повесить хук на RtlAllocateHeap() и RtlFreeHeap(), что позволит вам находит размер и количество аллокаций/освобождений в определённых операциях.
+
+
+Можно заметить, что одна аллокация особенно выделяется. Выделение большого количества байт указывает на запрос К целевому уязвимому серверу.
+
+Заключение
+
+Менеджеры кучи очень сложны для понимания, для эксплуатации переполнения кучи требуется много человекочасов, посколько каждая ситуация отличается от других. Понимание теукщего контекста в целевом приложени и ограничений, которые он несёт, являются ключом для понимания, есть ли возможность эксплуации переполнения. Механизмы защиты, введённые Microsoft предотвращают большинство обычных способов переполнения, однако периодически мы можем видеть как в некоторых приложениях возникают условия, позволяющие использовать их атакующему.
+
+Ссылки:
 - http://windbg.info/doc/1-common-cmds.html
 - http://www.insomniasec.com/publications/Heaps_About_Heaps.ppt
 - http://cybertech.net/~sh0ksh0k/projects/winheap/XPSP2 Heap Exploitation.ppt
@@ -87,3 +59,4 @@ References:
 - http://grey-corner.blogspot.com/2010/12/introducing-vulnserver.html
 - http://www.immunityinc.com/downloads/immunity_win32_exploitation.final2.ppt
 - Understanding and bypassing Windows Heap Protection by Nicolas Waisman (2007): http://kkamagui.springnote.com/pages/1350732/attachments/579350
+
